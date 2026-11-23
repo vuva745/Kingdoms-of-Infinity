@@ -1,3 +1,4 @@
+import { Camera, Vector3 } from 'three';
 import { toggleMute, unlockAudio } from './audio';
 
 /** Shows the `#start` overlay until the player taps PLAY or presses a key, then calls `onStart` once. */
@@ -84,4 +85,52 @@ export function pulse(el: HTMLElement): void {
   el.classList.remove('pulse');
   void el.offsetWidth;
   el.classList.add('pulse');
+}
+
+/** Big centred text pop ("GO!", "THREAT 2"). */
+export function announce(text: string, className = '', duration = 900): void {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const el = document.createElement('div');
+  el.className = `announce ${className}`;
+  el.textContent = text;
+  el.style.animationDuration = `${duration}ms`;
+  app.appendChild(el);
+  setTimeout(() => el.remove(), duration + 60);
+}
+
+/** "3, 2, 1, GO!" sequence; calls `onGo` when GO appears. */
+export function countdown(onGo: () => void, steps: readonly string[] = ['3', '2', '1']): void {
+  steps.forEach((step, i) => setTimeout(() => announce(step, 'count', 780), i * 800));
+  setTimeout(() => {
+    announce('GO!', 'go', 900);
+    onGo();
+  }, steps.length * 800);
+}
+
+/** Small text that floats up and fades, positioned in viewport percent. */
+export function floatText(text: string, color = '#fff', x = 50, y = 45): void {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const el = document.createElement('div');
+  el.className = 'float-text';
+  el.textContent = text;
+  el.style.color = color;
+  el.style.left = `${Math.max(6, Math.min(94, x))}%`;
+  el.style.top = `${Math.max(12, Math.min(88, y))}%`;
+  app.appendChild(el);
+  setTimeout(() => el.remove(), 1150);
+}
+
+/** Horizontal shake on a HUD element (damage feedback). */
+export function shakeEl(el: HTMLElement): void {
+  el.classList.remove('shake');
+  void el.offsetWidth;
+  el.classList.add('shake');
+}
+
+/** World position -> viewport percent, for anchoring floatText to objects. */
+export function toScreen(position: Vector3, camera: Camera): { x: number; y: number } {
+  const v = position.clone().project(camera);
+  return { x: (v.x + 1) * 50, y: (1 - v.y) * 50 };
 }

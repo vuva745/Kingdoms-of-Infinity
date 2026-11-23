@@ -199,3 +199,73 @@ export function formatTime(ms: number): string {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
+
+// ---------- Easing & tweens ----------
+export const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
+export const easeInCubic = (t: number): number => t * t * t;
+export const easeInOutSine = (t: number): number => -(Math.cos(Math.PI * t) - 1) / 2;
+export const easeOutBack = (t: number): number => {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+};
+export const easeOutElastic = (t: number): number =>
+  t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;
+
+interface Tween { duration: number; elapsed: number; update: (t: number) => void; done?: () => void; ease: (t: number) => number }
+
+/** Minimal frame-driven tween list: `add(duration, t => ...)`, call `update(dt)` each frame. */
+export class Tweens {
+  private list: Tween[] = [];
+  add(duration: number, update: (t: number) => void, opts: { ease?: (t: number) => number; done?: () => void; delay?: number } = {}): void {
+    this.list.push({ duration, elapsed: -(opts.delay ?? 0), update, done: opts.done, ease: opts.ease ?? easeOutCubic });
+  }
+  update(dt: number): void {
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      const tw = this.list[i];
+      tw.elapsed += dt;
+      if (tw.elapsed < 0) continue;
+      const t = Math.min(1, tw.elapsed / tw.duration);
+      tw.update(tw.ease(t));
+      if (t >= 1) {
+        this.list.splice(i, 1);
+        tw.done?.();
+      }
+    }
+  }
+}
+
+/** Pool of expanding, fading rings for impacts, spawns and pickups. */
+export class Shockwaves {
+  private readonly pool: { mesh: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>; life: number; max: number; size: number }[] = [];
+  constructor(scene: THREE.Object3D, count = 10) {
+    for (let i = 0; i < count; i++) {
+      const mesh = new THREE.Mesh(
+        new THREE.RingGeometry(0.82, 1, 48),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }),
+      );
+      mesh.visible = false;
+      scene.add(mesh);
+      this.pool.push({ mesh, life: 0, max: 1, size: 1 });
+    }
+  }
+  spawn(position: THREE.Vector3, color: THREE.ColorRepresentation, size = 4, duration = 0.5, vertical = false): void {
+    const item = this.pool.find((p) => p.life <= 0) ?? this.pool[0];
+    item.mesh.position.copy(position);
+    item.mesh.rotation.set(vertical ? 0 : -Math.PI / 2, 0, 0);
+    item.mesh.material.color.set(color);
+    item.mesh.scale.setScalar(0.1);
+    item.life = item.max = duration;
+    item.size = size;
+    item.mesh.visible = true;
+  }
+  update(dt: number): void {
+    for (const item of this.pool) {
+      if (item.life <= 0) continue;
+      item.life -= dt;
+      const t = 1 - Math.max(0, item.life) / item.max;
+      item.mesh.scale.setScalar(0.1 + item.size * easeOutCubic(t));
+      item.mesh.material.opacity = (1 - t) * 0.9;
+      if (item.life <= 0) item.mesh.visible = false;
+    }
+  }
+}

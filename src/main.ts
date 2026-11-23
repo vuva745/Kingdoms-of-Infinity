@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { canEnterPortal, clamp, near2d } from './logic';
 import { showResults } from './leaderboard';
-import { Particles, Shake, box, flash, formatTime, glow, makeCanvasTexture, makeSkyDome, mesh, pick, rand, std } from './fx';
+import { Particles, Shake, Shockwaves, Tweens, box, easeInOutSine, easeOutBack, flash, formatTime, glow, makeCanvasTexture, makeSkyDome, mesh, pick, rand, std } from './fx';
 import { createPipeline, createRenderer } from './postfx';
 import { loadModel, swapModel } from './models';
 import { sfx } from './audio';
-import { bindMute, createInput, hearts, pulse, setBar, waitForStart } from './screen';
+import { announce, bindMute, createInput, floatText, hearts, pulse, setBar, shakeEl, toScreen, waitForStart } from './screen';
 import './style.css';
 
 const TOTAL = 12;
@@ -170,6 +170,8 @@ for (let i = 0; i < 12; i++) {
 // Crystals
 const crystalMat = new THREE.MeshPhysicalMaterial({ color: 0x5ff1ff, emissive: 0x1aa8c8, emissiveIntensity: 1.0, metalness: 0.1, roughness: 0.12, clearcoat: 1, transparent: true, opacity: 0.95 });
 const pedestalMat = std(0x9aa3b5, { roughness: 0.6, metalness: 0.4 });
+const haloMat = glow(0x7ef3ff, 1.4, { transparent: true, opacity: 0.85 });
+const halos: THREE.Mesh[] = [];
 const crystals: THREE.Object3D[] = [];
 for (const spot of crystalSpots) {
   mesh(new THREE.CylinderGeometry(0.9, 1.1, 0.35, 8), pedestalMat, scene, spot.x, spot.y + 0.15, spot.z);
@@ -181,6 +183,11 @@ for (const spot of crystalSpots) {
   scene.add(crystal);
   crystals.push(crystal);
   swapModel(crystal, placeholder, 'crystal');
+  // spinning halo ring on the pedestal
+  const halo = mesh(new THREE.TorusGeometry(1.05, 0.045, 8, 40), haloMat, scene, spot.x, spot.y + 0.42, spot.z, false);
+  halo.rotation.x = Math.PI / 2;
+  crystal.userData.halo = halo;
+  halos.push(halo);
 }
 
 // Portal
@@ -244,7 +251,7 @@ playerLight.position.set(0, 1.5, 0);
 player.add(playerLight);
 
 // Slimes
-interface Slime { group: THREE.Group; target: THREE.Vector2; speed: number; phase: number; stun: number }
+interface Slime { group: THREE.Group; target: THREE.Vector2; speed: number; phase: number; stun: number; chasing: boolean }
 const slimes: Slime[] = [];
 const slimeMat = std(0x62d13a, { roughness: 0.3, metalness: 0.1, emissive: 0x2f7a16, emissiveIntensity: 0.35, transparent: true, opacity: 0.92 });
 const eyeMat = std(0x111111, { roughness: 0.3 });
@@ -259,12 +266,33 @@ for (let i = 0; i < 6; i++) {
   const a = (i / 6) * Math.PI * 2 + 0.4;
   group.position.set(Math.cos(a) * 24, 0, Math.sin(a) * 24);
   scene.add(group);
-  slimes.push({ group, target: new THREE.Vector2(group.position.x, group.position.z), speed: 2.2, phase: rand(0, 6), stun: 0 });
+  slimes.push({ group, target: new THREE.Vector2(group.position.x, group.position.z), speed: 2.2, phase: rand(0, 6), stun: 0, chasing: false });
+}
+
+// Birds circling the sky
+interface Bird { group: THREE.Group; wings: THREE.Mesh[]; center: THREE.Vector2; radius: number; angle: number; speed: number; height: number; phase: number }
+const birds: Bird[] = [];
+const birdMat = std(0x1d1a24, { roughness: 0.9, side: THREE.DoubleSide });
+for (let i = 0; i < 7; i++) {
+  const group = new THREE.Group();
+  mesh(new THREE.CapsuleGeometry(0.1, 0.5, 3, 6), birdMat, group, 0, 0, 0, false).rotation.x = Math.PI / 2;
+  const wings = [-1, 1].map((side) => {
+    const wing = mesh(new THREE.PlaneGeometry(0.9, 0.35), birdMat, group, side * 0.45, 0, 0, false);
+    wing.rotation.x = -Math.PI / 2;
+    return wing;
+  });
+  scene.add(group);
+  birds.push({ group, wings, center: new THREE.Vector2(rand(-30, 30), rand(-40, 20)), radius: rand(12, 28), angle: rand(0, 6), speed: rand(0.2, 0.4) * (Math.random() < 0.5 ? 1 : -1), height: rand(13, 20), phase: rand(0, 6) });
 }
 
 const sparkle = new Particles(scene, 600, 0.35, 2.5);
 const motes = new Particles(scene, 400, 0.3, -1.2);
 const shake = new Shake();
+const tweens = new Tweens();
+const waves = new Shockwaves(scene, 12);
+let intro = 0, focusTimer = 0, wobble = 0, stretch = 1;
+const INTRO_SECONDS = 2.8;
+const knightVisual = (): THREE.Object3D | undefined => player.children.find((c) => c !== playerLight);
 
 // ---------- State ----------
 const held = createInput(['up', 'down', 'left', 'right', 'action'] as const, { ArrowUp: 'up', w: 'up', W: 'up', ArrowDown: 'down', s: 'down', S: 'down', ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right', ' ': 'action', Enter: 'action' });
@@ -282,21 +310,54 @@ const hud = {
 
 function finish(won: boolean): void {
   ended = true;
-  if (won) sfx.win(); else sfx.lose();
-  showResults(hud.message, { won, score: Math.min(score, TOTAL), goal: TOTAL, scoreLabel: 'Crystals', durationMs: Math.round(performance.now() - startedAt), winTitle: '🏆 PORTAL CROSSED', loseTitle: '💀 FALLEN HERO' });
+  const durationMs = Math.round(performance.now() - startedAt);
+  player.visible = true;
+  if (won) {
+    sfx.win();
+    // the knight is drawn into the portal: glide to its centre, spin and shrink into the light
+    const from = player.position.clone();
+    const to = portal.position.clone().setY(portal.position.y + 1.2);
+    const baseFacing = facing;
+    waves.spawn(portal.position.clone().setY(portal.position.y + 0.1), 0xd45aff, 10, 1.2);
+    tweens.add(1.8, (t) => {
+      player.position.lerpVectors(from, to, t);
+      player.position.y += Math.sin(t * Math.PI) * 1.5;
+      player.rotation.y = baseFacing + t * Math.PI * 6;
+      player.scale.setScalar(1 - t * 0.95);
+      if (Math.random() < 0.8) motes.emit(player.position.x + rand(-0.6, 0.6), player.position.y + rand(0, 2), player.position.z + rand(-0.6, 0.6), 0, 2, 0, new THREE.Color(0xd45aff), 0.8);
+    }, { ease: easeInOutSine, done: () => { flash('#ffffff', 0.9); sparkle.burst(to, 160, 0xd45aff, 9, 1.2, 0.8); waves.spawn(to, 0xffffff, 8, 0.8, true); } });
+  } else {
+    sfx.lose();
+    // the knight topples backwards and the world dims
+    const visual = knightVisual();
+    tweens.add(1.0, (t) => {
+      if (visual) visual.rotation.x = t * (Math.PI / 2);
+      player.position.y = heightAt(player.position.x, player.position.z) - t * 0.4;
+      sun.intensity = 2.3 - t * 1.4;
+    }, { ease: easeOutBack });
+  }
+  setTimeout(() => showResults(hud.message, { won, score: Math.min(score, TOTAL), goal: TOTAL, scoreLabel: 'Crystals', durationMs, winTitle: '🏆 PORTAL CROSSED', loseTitle: '💀 FALLEN HERO' }), 2000);
 }
 
 function damage(from: THREE.Vector3): void {
   hp -= 1;
   invulnerable = 1.2;
+  wobble = 1;
   shake.add(0.8);
   flash('#ff2a3a', 0.5);
   sfx.hit();
   const dx = player.position.x - from.x, dz = player.position.z - from.z, len = Math.hypot(dx, dz) || 1;
-  player.position.x = clamp(player.position.x + (dx / len) * 3, -WORLD, WORLD);
-  player.position.z = clamp(player.position.z + (dz / len) * 3, -WORLD, WORLD);
+  const start = player.position.clone();
+  const target = new THREE.Vector3(clamp(player.position.x + (dx / len) * 3.5, -WORLD, WORLD), 0, clamp(player.position.z + (dz / len) * 3.5, -WORLD, WORLD));
+  tweens.add(0.35, (t) => {
+    player.position.x = THREE.MathUtils.lerp(start.x, target.x, t);
+    player.position.z = THREE.MathUtils.lerp(start.z, target.z, t);
+  });
+  waves.spawn(from.clone().setY(from.y + 0.1), 0xff3b4e, 4, 0.5);
+  const at = toScreen(player.position, camera);
+  floatText('-1 ❤️', '#ff5566', at.x, at.y - 12);
   hud.hearts.textContent = hearts(hp, 3);
-  pulse(hud.hearts);
+  shakeEl(hud.hearts);
   if (hp <= 0) finish(false);
 }
 
@@ -308,6 +369,10 @@ function openPortal(): void {
   portalLight.intensity = 12;
   hud.hintText.textContent = 'to the portal!';
   pulse(hud.hintText);
+  announce('PORTAL AWAKENED', 'soft', 1800);
+  focusTimer = 2.6; // cinematic look at the portal
+  tweens.add(1.4, (t) => ring.scale.setScalar(1 + Math.sin(t * Math.PI) * 0.45), { ease: (t) => t });
+  for (let i = 0; i < 4; i++) tweens.add(0.01, () => waves.spawn(portal.position.clone().setY(portal.position.y + 0.1), 0xd45aff, 6 + i * 2, 0.9), { delay: i * 0.3 });
 }
 
 const camTarget = new THREE.Vector3();
@@ -339,6 +404,16 @@ function update(dt: number): void {
     facing += delta * Math.min(1, dt * 10);
   }
   player.rotation.y = facing;
+  // body language: lean into the run, stretch on dash, wobble when hit, sway while idle
+  wobble = Math.max(0, wobble - dt * 1.8);
+  stretch = THREE.MathUtils.lerp(stretch, dash > 0 ? 1.35 : 1, 0.2);
+  const visual = knightVisual();
+  if (visual) {
+    visual.rotation.x = THREE.MathUtils.lerp(visual.rotation.x, moving ? -0.14 - (dash > 0 ? 0.2 : 0) : 0, 0.15);
+    visual.rotation.z = Math.sin(elapsed * 30) * wobble * 0.25 + (moving ? Math.sin(elapsed * 11) * 0.04 : 0);
+    visual.scale.set(1 / Math.sqrt(stretch), 1 / Math.sqrt(stretch), stretch);
+    visual.position.y = moving ? 0 : Math.sin(elapsed * 2) * 0.03;
+  }
   cape.rotation.x = -0.15 - (moving ? 0.5 + Math.sin(elapsed * 10) * 0.1 : 0) - (dash > 0 ? 0.6 : 0);
   sword.rotation.z = moving ? Math.sin(elapsed * 11) * 0.25 : 0;
   body.rotation.z = moving ? Math.sin(elapsed * 11) * 0.05 : 0;
@@ -350,14 +425,25 @@ function update(dt: number): void {
     c.rotation.y += dt * 1.5;
     const spot = c.userData.phase as number;
     c.position.y = heightAt(c.position.x, c.position.z) + 1.5 + Math.sin(elapsed * 2.5 + spot) * 0.2;
+    c.scale.setScalar(1 + Math.sin(elapsed * 3 + spot) * 0.06);
     if (Math.random() < 0.06) motes.emit(c.position.x + rand(-0.6, 0.6), c.position.y + rand(-0.8, 0.8), c.position.z + rand(-0.6, 0.6), 0, 0.6, 0, new THREE.Color(0x9fe8ff), 1.2);
     if (c.position.distanceTo(player.position.clone().setY(c.position.y)) < 1.9) {
-      scene.remove(c);
       crystals.splice(i, 1);
       score += 1;
       sfx.pickup();
       sparkle.burst(c.position, 80, 0x7ef3ff, 6, 0.9, 0.3);
       sparkle.burst(c.position, 30, 0xffffff, 3, 0.6, 0.2);
+      waves.spawn(c.position.clone().setY(c.position.y - 1.1), 0x7ef3ff, 4, 0.6);
+      const at = toScreen(c.position, camera);
+      floatText(`💎 ${score} / ${TOTAL}`, '#7ef3ff', at.x, at.y - 8);
+      const y0 = c.position.y;
+      const halo = c.userData.halo as THREE.Mesh | undefined;
+      tweens.add(0.5, (t) => {
+        c.position.y = y0 + t * 3;
+        c.rotation.y += 0.5;
+        c.scale.setScalar(1 - t);
+        if (halo) halo.scale.setScalar(1 + t * 2), ((halo.material as THREE.MeshStandardMaterial).opacity = 0.85 * (1 - t));
+      }, { done: () => { scene.remove(c); if (halo) { scene.remove(halo); halos.splice(halos.indexOf(halo), 1); } } });
       playerLight.intensity = 10;
       hud.crystals.textContent = `💎 ${score} / ${TOTAL}`;
       pulse(hud.crystals);
@@ -387,6 +473,15 @@ function update(dt: number): void {
     s.stun -= dt;
     const toPlayer = Math.hypot(player.position.x - g.position.x, player.position.z - g.position.z);
     if (s.stun <= 0) {
+      const chasing = toPlayer < 13;
+      if (chasing && !s.chasing) {
+        // alert hop + "!" when a slime spots the knight
+        const g0 = g;
+        tweens.add(0.5, (t) => g0.position.y += Math.sin(t * Math.PI) * 0.08, { ease: (t) => t });
+        const at = toScreen(g.position.clone().setY(g.position.y + 1.6), camera);
+        floatText('!', '#9dff6a', at.x, at.y);
+      }
+      s.chasing = chasing;
       if (toPlayer < 13) s.target.set(player.position.x, player.position.z);
       else if (Math.hypot(s.target.x - g.position.x, s.target.y - g.position.z) < 1 || Math.random() < 0.004) s.target.set(rand(-WORLD + 5, WORLD - 5), rand(-WORLD + 5, WORLD - 5));
       const sp = toPlayer < 13 ? 4.6 : 2.2;
@@ -439,24 +534,65 @@ function animate(now: number): void {
   else {
     for (const c of crystals) { c.rotation.y += dt; c.position.y = heightAt(c.position.x, c.position.z) + 1.5 + Math.sin(elapsed * 2.5 + (c.userData.phase as number)) * 0.2; }
     ring.rotation.z += dt * 0.2;
-    player.position.y = heightAt(player.position.x, player.position.z);
+    if (!ended) player.position.y = heightAt(player.position.x, player.position.z);
   }
   for (const cloud of clouds) {
     cloud.position.x += dt * 1.2;
     if (cloud.position.x > 120) cloud.position.x = -120;
   }
+  // ambient motion: wind in the trees, spinning halos, circling birds
+  treeObjects.forEach((tree, i) => {
+    tree.rotation.z = Math.sin(elapsed * 1.3 + i * 0.7) * 0.025;
+    tree.rotation.x = Math.cos(elapsed * 1.1 + i * 1.3) * 0.018;
+  });
+  for (const halo of halos) halo.rotation.z += dt * 1.2;
+  haloMat.emissiveIntensity = 1.2 + Math.sin(elapsed * 3) * 0.5;
+  for (const b of birds) {
+    b.angle += dt * b.speed;
+    const x = b.center.x + Math.cos(b.angle) * b.radius, z = b.center.y + Math.sin(b.angle) * b.radius;
+    const nx = b.center.x + Math.cos(b.angle + 0.05 * Math.sign(b.speed)) * b.radius, nz = b.center.y + Math.sin(b.angle + 0.05 * Math.sign(b.speed)) * b.radius;
+    b.group.position.set(x, b.height + Math.sin(elapsed * 1.5 + b.phase) * 0.8, z);
+    b.group.lookAt(nx, b.group.position.y, nz);
+    const flap = Math.sin(elapsed * 9 + b.phase) * 0.7;
+    b.wings[0].rotation.y = flap;
+    b.wings[1].rotation.y = -flap;
+  }
   helmet.rotation.y = elapsed * 0.1;
   sparkle.update(dt);
   motes.update(dt);
-  camTarget.set(player.position.x, player.position.y + 13, player.position.z + 16);
-  camera.position.lerp(camTarget, 0.1);
-  camera.lookAt(player.position.x, player.position.y + 1, player.position.z - 2);
+  waves.update(dt);
+  tweens.update(dt);
+  if (focusTimer > 0) {
+    // cinematic: pan to the awakened portal, then return
+    focusTimer -= dt;
+    camTarget.set(portal.position.x, portal.position.y + 7, portal.position.z + 13);
+    camera.position.lerp(camTarget, 0.08);
+    camera.lookAt(portal.position.x, portal.position.y + 2.5, portal.position.z);
+  } else if (ended) {
+    camTarget.set(player.position.x + Math.sin(elapsed * 0.35) * 10, player.position.y + 6, player.position.z + Math.cos(elapsed * 0.35) * 10);
+    camera.position.lerp(camTarget, 0.05);
+    camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
+  } else {
+    camTarget.set(player.position.x, player.position.y + 13, player.position.z + 16);
+    if (intro > 0) {
+      // sweep in over the forest towards the hero
+      intro -= dt;
+      const t = easeInOutSine(1 - Math.max(0, intro) / INTRO_SECONDS);
+      camTarget.lerpVectors(new THREE.Vector3(-28, 24, 30), camTarget, t);
+      camera.position.lerp(camTarget, 0.12);
+    } else camera.position.lerp(camTarget, 0.1);
+    camera.lookAt(player.position.x, player.position.y + 1, player.position.z - 2);
+  }
   shake.apply(camera, dt);
   pipeline.render();
 }
 
 requestAnimationFrame(animate);
 waitForStart(() => {
-  started = true;
-  startedAt = performance.now();
+  intro = INTRO_SECONDS;
+  announce('BEGIN!', 'go', 1200);
+  setTimeout(() => {
+    started = true;
+    startedAt = performance.now();
+  }, 900);
 });
