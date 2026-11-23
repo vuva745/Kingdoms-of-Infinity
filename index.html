@@ -1,1 +1,33 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/><title>Kingdoms of Infinity</title></head><body><div id="app"><div id="hud">Kingdoms of Infinity</div><div id="controls"><div class="pad"><button id="up">▲</button><button id="left">◀</button><button id="down">▼</button><button id="right">▶</button></div><button id="action">EXPLORE</button></div><div id="message" hidden></div></div><script type="module" src="/src/main.ts"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
+<meta name="theme-color" content="#3e7bd6"/>
+<title>Kingdoms of Infinity</title>
+</head>
+<body style="--accent:#7ef3ff">
+<div id="app">
+  <div id="hud">
+    <div class="row"><span class="title">KINGDOMS OF INFINITY</span><span id="timer">0:00</span><button id="mute" aria-label="Toggle sound">🔊</button></div>
+    <div class="bar"><div class="fill" id="progress"></div></div>
+    <div class="row"><span id="hearts">❤️❤️❤️</span><span id="crystals">💎 0 / 12</span><span id="hint" class="muted"><span id="compass">➤</span> <span id="hint-text">nearest crystal</span></span></div>
+  </div>
+  <div id="flash"></div>
+  <div id="message" hidden></div>
+  <div id="controls">
+    <div class="pad"><button id="up">▲</button><button id="left">◀</button><button id="down">▼</button><button id="right">▶</button></div>
+    <button id="action">DASH</button>
+  </div>
+  <div id="start">
+    <div class="card">
+      <h1>KINGDOMS OF INFINITY</h1>
+      <p>Explore the sunlit kingdom, gather all 12 crystals and awaken the portal to the north. Beware the slimes roaming the meadows. Follow the compass.</p>
+      <p class="keys">Keyboard: arrows / WASD to move · Space to dash<br/>Touch: on-screen pad and DASH</p>
+      <button id="play">▶ BEGIN QUEST</button>
+    </div>
+  </div>
+</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
