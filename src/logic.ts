@@ -1,0 +1,1 @@
+export function clamp(n:number,min:number,max:number){return Math.max(min,Math.min(max,n))}export function near2d(ax:number,az:number,bx:number,bz:number,r:number){return Math.hypot(ax-bx,az-bz)<r}export function canEnterPortal(score:number,total=12){return score>=total}
