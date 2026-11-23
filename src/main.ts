@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { clamp, near2d } from './logic';
+import { showResults } from './leaderboard';
 import './style.css';
+const startedAt = performance.now();
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x163a29); scene.fog = new THREE.Fog(0x163a29,45,130);
 const camera = new THREE.PerspectiveCamera(65,innerWidth/innerHeight,.1,200);
 const renderer = new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
@@ -14,7 +16,7 @@ for(const id of Object.keys(held) as Control[]){const el=document.getElementById
 const keymap:Record<string,Control>={ArrowUp:'up',w:'up',ArrowDown:'down',s:'down',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right',' ':'action',Enter:'action'};
 window.addEventListener('keydown',e=>{const k=keymap[e.key];if(k){e.preventDefault();held[k]=true}});window.addEventListener('keyup',e=>{const k=keymap[e.key];if(k){e.preventDefault();held[k]=false}});window.addEventListener('blur',()=>{for(const k of Object.keys(held) as Control[])held[k]=false});
 const hud=document.querySelector<HTMLElement>('#hud')!;const message=document.querySelector<HTMLElement>('#message')!;let ended=false;
-function finish(won:boolean,score:number){ended=true;message.hidden=false;message.innerHTML=`<h2>${won?'🏆 YOU WIN':'💥 GAME OVER'}</h2><p>Score: ${score}</p><button id="restart">RESTART</button>`;document.getElementById('restart')!.onclick=()=>location.reload()}
+function finish(won:boolean,score:number){ended=true;showResults(message,{won,score:Math.min(score,12),goal:12,scoreLabel:'Crystals',durationMs:Math.round(performance.now()-startedAt)})}
 let last=performance.now();function loop(now:number){requestAnimationFrame(loop);const dt=Math.min((now-last)/1000,.05);last=now;if(!ended)update(dt);renderer.render(scene,camera)}
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 cube(105,.25,105,0x286b3e,0,-.25,0);const crystals:THREE.Mesh[]=[];for(let i=0;i<12;i++){const a=i*Math.PI*2/12,r=8+(i%4)*6;crystals.push(orb(.65,0x49eeff,Math.cos(a)*r,1,Math.sin(a)*r))}
